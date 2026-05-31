@@ -811,6 +811,68 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: #445; }
+
+  /* PAINT PALETTE */
+  #palette-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .palette-label { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
+  #layer-palette { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .palette-btn {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: white;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    background: var(--pal-color, #555);
+    flex-shrink: 0;
+  }
+  .palette-btn:hover { transform: scale(1.18); }
+  .palette-btn.pal-active {
+    border-color: white;
+    box-shadow: 0 0 0 2px var(--accent), 0 2px 10px rgba(0,0,0,0.5);
+  }
+  .pal-clear {
+    width: auto; border-radius: 7px; padding: 0 10px;
+    background: var(--danger) !important; font-size: 0.73rem;
+  }
+  #tol-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  }
+  .tol-label { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; min-width: 140px; }
+
+  /* PAINT CANVAS */
+  #paint-canvas-wrap {
+    position: relative;
+    display: block;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #111;
+    cursor: crosshair;
+    margin-bottom: 8px;
+  }
+  #paint-canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 500px;
+    image-rendering: pixelated;
+    width: 100%;
+  }
+  #paint-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
 </style>
 </head>
 <body>
@@ -873,30 +935,7 @@
         <input type="range" id="smoothing" min="0" max="5" value="2" step="1">
         <span class="control-value" id="smoothing-val">2</span>
       </div>
-      <div class="control-row">
-        <span class="control-label">Bright side</span>
-        <select id="layer-order" style="flex:1">
-          <option value="bright-top">Bright = top (light subjects)</option>
-          <option value="dark-top">Dark = top (dark subjects)</option>
-        </select>
-      </div>
-      <label class="toggle-row">
-        <input type="checkbox" id="bg-remove">
-        Remove background
-      </label>
-      <div class="bg-options" id="bg-options">
-        <div class="control-row" style="margin-bottom:0">
-          <span class="control-label">BG color</span>
-          <select id="bg-type" style="flex:1">
-            <option value="light">Light / white background</option>
-            <option value="dark">Dark / black background</option>
-          </select>
-        </div>
-        <div class="control-row" style="margin-bottom:0">
-          <span class="control-label">Threshold</span>
-          <input type="range" id="bg-threshold" min="0.02" max="0.6" step="0.01" value="0.15">
-          <span class="control-value" id="bg-threshold-val">15%</span>
-        </div>
+      <div>
       </div>
     </div>
 
@@ -960,9 +999,12 @@
 const DEFAULT_COLORS = ['#1a1a1a','#2d3561','#4464ad','#66b2b2','#a8d8a8','#f9e784','#f4845f','#f5f5f5'];
 let imageEl = null;
 let imgW = 0, imgH = 0;
-let grayData = null;       // Float32Array of grayscale [0..1]
-let masks = [];            // Array of Uint8Array per layer
-let zipData = null;        // Generated ZIP blob
+let rawRGBA = null;        // Uint8Array [r,g,b,a,...] at current resolution
+let pixelLayerMap = null;  // Int8Array: -1=unassigned, 0..n-1=layer index
+let overlayImgData = null; // ImageData for semi-transparent color overlay
+let activeLayer = 0;       // layer selected for painting
+let masks = [];
+let zipData = null;
 let generationDone = false;
 
 // ─── DOM REFS ─────────────────────────────────────────────────────────────────
@@ -988,37 +1030,30 @@ const previewArea  = document.getElementById('preview-area');
 const emptyState   = document.getElementById('empty-state');
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-function getNumLayers()    { return parseInt(numLayersEl.value); }
-function getLayerHeight()  { return parseFloat(layerHeightEl.value); }
-function getResolution()   { return parseInt(resolutionEl.value); }
-function getPrintWidth()   { return parseFloat(printWidthEl.value) || 100; }
-function getPrintHeight()  { return parseFloat(printHeightEl.value) || 100; }
-function getLayerColor(k)  {
+function getNumLayers()  { return parseInt(numLayersEl.value); }
+function getLayerHeight(){ return parseFloat(layerHeightEl.value); }
+function getResolution() { return parseInt(resolutionEl.value); }
+function getPrintWidth() { return parseFloat(printWidthEl.value) || 100; }
+function getPrintHeight(){ return parseFloat(printHeightEl.value) || 100; }
+function getLayerColor(k){
   const inp = document.getElementById('color-'+k);
   return inp ? inp.value : DEFAULT_COLORS[k % DEFAULT_COLORS.length];
 }
-function getInvertLayers() { return document.getElementById('layer-order').value === 'dark-top'; }
-function getBgRemove()     { return document.getElementById('bg-remove').checked; }
-function getBgIsLight()    { return document.getElementById('bg-type').value === 'light'; }
-function getBgThreshold()  { return parseFloat(document.getElementById('bg-threshold').value); }
-function getEdgeMode()     { return document.getElementById('edge-mode').value; }
-function getSmoothing()    { return parseInt(document.getElementById('smoothing').value); }
-function getLayerParams()  {
-  return [getNumLayers(), getInvertLayers(), getBgRemove(), getBgIsLight(), getBgThreshold()];
+function getEdgeMode()   { return document.getElementById('edge-mode').value; }
+function getSmoothing()  { return parseInt(document.getElementById('smoothing').value); }
+function getFillTolerance() {
+  const el = document.getElementById('fill-tol');
+  return el ? parseInt(el.value) : 30;
 }
 
 function hexToRgb(hex) {
-  const r = parseInt(hex.slice(1,3),16);
-  const g = parseInt(hex.slice(3,5),16);
-  const b = parseInt(hex.slice(5,7),16);
-  return [r,g,b];
+  return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
 }
 
 // ─── COLOR ROWS ───────────────────────────────────────────────────────────────
 function updateColorRows() {
   const n = getNumLayers();
   const lh = getLayerHeight();
-  // Save existing colours
   const existing = [];
   for (let k = 0; k < 8; k++) {
     const inp = document.getElementById('color-'+k);
@@ -1041,79 +1076,149 @@ function updateColorRows() {
     const sw  = row.querySelector('.color-swatch');
     inp.addEventListener('input', () => {
       sw.style.background = inp.value;
-      updatePreview();
+      updateOverlay();
+      updatePalette();
+      renderLayerCards();
     });
   }
+  updatePalette();
 }
 
-// ─── IMAGE PROCESSING ─────────────────────────────────────────────────────────
-function getImageData(res) {
-  // Scale image to fit within res×res maintaining aspect ratio
-  const src = imageEl;
-  const aspect = src.naturalWidth / src.naturalHeight;
-  let w, h;
-  if (aspect >= 1) {
-    w = res;
-    h = Math.max(1, Math.round(res / aspect));
-  } else {
-    h = res;
-    w = Math.max(1, Math.round(res * aspect));
+// ─── LAYER PALETTE ───────────────────────────────────────────────────────────
+function updatePalette() {
+  const palette = document.getElementById('layer-palette');
+  if (!palette) return;
+  const n = getNumLayers();
+  palette.innerHTML = '';
+
+  const eraser = document.createElement('button');
+  eraser.className = 'palette-btn' + (activeLayer === -1 ? ' pal-active' : '');
+  eraser.style.setProperty('--pal-color', '#555');
+  eraser.title = 'Eraser — unassign pixels';
+  eraser.innerHTML = '⌫';
+  eraser.addEventListener('click', () => { activeLayer = -1; updatePalette(); });
+  palette.appendChild(eraser);
+
+  for (let k = 0; k < n; k++) {
+    const color = getLayerColor(k);
+    const btn = document.createElement('button');
+    btn.className = 'palette-btn' + (activeLayer === k ? ' pal-active' : '');
+    btn.style.setProperty('--pal-color', color);
+    btn.title = `Layer ${k+1}`;
+    btn.textContent = k + 1;
+    btn.addEventListener('click', () => { activeLayer = k; updatePalette(); });
+    palette.appendChild(btn);
   }
-  const offscreen = document.createElement('canvas');
-  offscreen.width  = w;
-  offscreen.height = h;
-  const ctx = offscreen.getContext('2d');
-  ctx.drawImage(src, 0, 0, w, h);
-  return { data: ctx.getImageData(0, 0, w, h).data, width: w, height: h };
+
+  const clr = document.createElement('button');
+  clr.className = 'palette-btn pal-clear';
+  clr.title = 'Clear all layer assignments';
+  clr.textContent = '✕ Clear';
+  clr.addEventListener('click', clearAllAssignments);
+  palette.appendChild(clr);
 }
 
-function computeGray(imageDataResult) {
-  const { data, width, height } = imageDataResult;
-  const n = width * height;
-  const gray = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const r = data[i*4+0], g = data[i*4+1], b = data[i*4+2];
-    gray[i] = (0.299*r + 0.587*g + 0.114*b) / 255;
+function clearAllAssignments() {
+  if (!pixelLayerMap) return;
+  pixelLayerMap.fill(-1);
+  updateOverlay();
+  buildMasksFromMap();
+  renderLayerCards();
+}
+
+// ─── FLOOD FILL ──────────────────────────────────────────────────────────────
+function floodFill(startX, startY) {
+  if (!rawRGBA || !pixelLayerMap) return;
+  const w = imgW, h = imgH;
+  const si = startY * w + startX;
+  const sr = rawRGBA[si*4], sg = rawRGBA[si*4+1], sb = rawRGBA[si*4+2];
+  const tol = getFillTolerance();
+  const tol2 = tol * tol;
+  const visited = new Uint8Array(w * h);
+  const queue = [si];
+  visited[si] = 1;
+
+  while (queue.length > 0) {
+    const idx = queue.pop();
+    pixelLayerMap[idx] = activeLayer;
+    const x = idx % w, y = (idx / w) | 0;
+    if (x > 0)   { const ni=idx-1; if(!visited[ni]){const dr=rawRGBA[ni*4]-sr,dg=rawRGBA[ni*4+1]-sg,db=rawRGBA[ni*4+2]-sb; if(dr*dr+dg*dg+db*db<=tol2){visited[ni]=1;queue.push(ni);}}}
+    if (x < w-1) { const ni=idx+1; if(!visited[ni]){const dr=rawRGBA[ni*4]-sr,dg=rawRGBA[ni*4+1]-sg,db=rawRGBA[ni*4+2]-sb; if(dr*dr+dg*dg+db*db<=tol2){visited[ni]=1;queue.push(ni);}}}
+    if (y > 0)   { const ni=idx-w; if(!visited[ni]){const dr=rawRGBA[ni*4]-sr,dg=rawRGBA[ni*4+1]-sg,db=rawRGBA[ni*4+2]-sb; if(dr*dr+dg*dg+db*db<=tol2){visited[ni]=1;queue.push(ni);}}}
+    if (y < h-1) { const ni=idx+w; if(!visited[ni]){const dr=rawRGBA[ni*4]-sr,dg=rawRGBA[ni*4+1]-sg,db=rawRGBA[ni*4+2]-sb; if(dr*dr+dg*dg+db*db<=tol2){visited[ni]=1;queue.push(ni);}}}
   }
-  return gray;
+  refreshCanvas();
+  buildMasksFromMap();
+  renderLayerCards();
 }
 
-function computeLayers(gray, numLayers, invertLayers, bgRemove, bgIsLight, bgThreshold) {
-  const n = gray.length;
-  const result = [];
-
-  // Build foreground mask — pixels that should be printed at all
-  const fg = new Uint8Array(n).fill(1);
-  if (bgRemove) {
-    for (let i = 0; i < n; i++) {
-      // bgIsLight: skip pixels that are too bright (white/light background)
-      // !bgIsLight: skip pixels that are too dark (black/dark background)
-      fg[i] = bgIsLight ? (gray[i] < 1 - bgThreshold ? 1 : 0)
-                        : (gray[i] > bgThreshold      ? 1 : 0);
+// ─── BRUSH PAINT ─────────────────────────────────────────────────────────────
+function paintPixels(x, y) {
+  if (!pixelLayerMap) return;
+  const br = Math.max(1, Math.round(imgW / 60));
+  for (let dy = -br; dy <= br; dy++) {
+    for (let dx = -br; dx <= br; dx++) {
+      if (dx*dx + dy*dy > br*br) continue;
+      const nx = x+dx, ny = y+dy;
+      if (nx >= 0 && ny >= 0 && nx < imgW && ny < imgH) pixelLayerMap[ny*imgW+nx] = activeLayer;
     }
   }
+}
 
-  // Cumulative layers: layer k covers pixels whose brightness passes its threshold
-  // invertLayers = true  → dark pixels are tall (threshold from top: dark = more layers)
-  // invertLayers = false → bright pixels are tall (default)
-  for (let k = 0; k < numLayers; k++) {
-    const mask = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-      if (!fg[i]) continue;
-      const active = invertLayers
-        ? gray[i] <= (1 - k / numLayers)   // dark pixels included in more layers
-        : gray[i] >= k / numLayers;         // bright pixels included in more layers
-      mask[i] = active ? 1 : 0;
+function canvasToPixel(canvas, e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left) * canvas.width / rect.width);
+  const y = Math.floor((e.clientY - rect.top) * canvas.height / rect.height);
+  return [Math.max(0, Math.min(canvas.width-1, x)), Math.max(0, Math.min(canvas.height-1, y))];
+}
+
+// ─── CANVAS RENDERING ────────────────────────────────────────────────────────
+function updateOverlay() {
+  if (!overlayImgData || !pixelLayerMap) return;
+  const n = getNumLayers();
+  const data = overlayImgData.data;
+  for (let i = 0; i < pixelLayerMap.length; i++) {
+    const lk = pixelLayerMap[i];
+    if (lk >= 0 && lk < n) {
+      const [r,g,b] = hexToRgb(getLayerColor(lk));
+      data[i*4]=r; data[i*4+1]=g; data[i*4+2]=b; data[i*4+3]=190;
+    } else {
+      data[i*4+3] = 0;
     }
-    result.push(mask);
   }
-  return result;
+  refreshCanvas();
+}
+
+function refreshCanvas() {
+  const canvas = document.getElementById('paint-canvas');
+  if (!canvas || !rawRGBA) return;
+  const ctx = canvas.getContext('2d');
+  const imgId = ctx.createImageData(imgW, imgH);
+  imgId.data.set(rawRGBA);
+  ctx.putImageData(imgId, 0, 0);
+  if (overlayImgData) {
+    const tmp = new OffscreenCanvas(imgW, imgH);
+    tmp.getContext('2d').putImageData(overlayImgData, 0, 0);
+    ctx.drawImage(tmp, 0, 0);
+  }
+}
+
+// ─── MASKS ───────────────────────────────────────────────────────────────────
+function buildMasksFromMap() {
+  const n = getNumLayers();
+  masks = [];
+  for (let k = 0; k < n; k++) {
+    const mask = new Uint8Array(imgW * imgH);
+    if (pixelLayerMap) {
+      for (let i = 0; i < pixelLayerMap.length; i++) {
+        if (pixelLayerMap[i] === k) mask[i] = 1;
+      }
+    }
+    masks.push(mask);
+  }
 }
 
 // ─── STL GENERATION ──────────────────────────────────────────────────────────
-// Returns Float32Array [x1,y1,z1, x2,y2,z2, x3,y3,z3, ...] — 9 values per triangle, no normals.
-// Shared by the STL exporter and the Three.js 3D viewer.
-// Blocky/voxel mesher: one box per active pixel (stair-stepped edges, many triangles).
 function voxelTriangles(mask, w, h, pixW, pixH, z0, z1) {
   const v = [];
   const t = (ax,ay,az,bx,by,bz,cx,cy,cz) => v.push(ax,ay,az,bx,by,bz,cx,cy,cz);
@@ -1177,7 +1282,7 @@ function buildSTL(mask, w, h, pixW, pixH, layerIndex, layerHeight) {
 }
 
 // ─── README ───────────────────────────────────────────────────────────────────
-function buildReadme(numLayers, layerHeight, printWidth, printHeight, imgW, imgH, colors) {
+function buildReadme(numLayers, layerHeight, printWidth, printHeight, iW, iH, colors) {
   const lines = [
     '3D Layer Maker - Print Instructions',
     '====================================',
@@ -1185,7 +1290,7 @@ function buildReadme(numLayers, layerHeight, printWidth, printHeight, imgW, imgH
     'Files generated: ' + numLayers + ' STL layers',
     'Print dimensions: ' + printWidth + ' x ' + printHeight + ' mm',
     'Layer height: ' + layerHeight + ' mm',
-    'Image resolution used: ' + imgW + ' x ' + imgH + ' px',
+    'Image resolution used: ' + iW + ' x ' + iH + ' px',
     '',
     'PRINTING INSTRUCTIONS',
     '---------------------',
@@ -1199,86 +1304,110 @@ function buildReadme(numLayers, layerHeight, printWidth, printHeight, imgW, imgH
   ];
   for (let k = 0; k < numLayers; k++) {
     const z0 = (k * layerHeight).toFixed(1);
-    const fname = `layer_${String(k+1).padStart(2,'0')}_z${z0}mm.stl`;
-    lines.push(`  ${fname}  →  Color: ${colors[k]}`);
+    lines.push(`  layer_${String(k+1).padStart(2,'0')}_z${z0}mm.stl  →  Color: ${colors[k]}`);
   }
   lines.push('');
   lines.push('HOW IT WORKS');
   lines.push('------------');
-  lines.push('The image is converted to grayscale. Brightness is divided into ' + numLayers + ' bands.');
-  lines.push('Layer 1 (bottom) covers the full print area (background).');
-  lines.push('Each subsequent layer only covers pixels brighter than the previous threshold.');
-  lines.push('Bright image areas have more layers stacked = taller = visible from above.');
+  lines.push('Regions were manually painted: click to flood-fill, drag to brush-paint.');
+  lines.push('Each layer only covers its painted pixels. Stack them to recreate the image in 3D.');
   lines.push('');
   lines.push('Generated with 3D Layer Maker — https://github.com/joshuaopel');
   return lines.join('\n');
 }
 
-// ─── PREVIEW ──────────────────────────────────────────────────────────────────
-function updatePreview() {
-  if (!imageEl) return;
-  const res = getResolution();
-  const imgDataResult = getImageData(res);
-  imgW = imgDataResult.width;
-  imgH = imgDataResult.height;
-  grayData = computeGray(imgDataResult);
-  const [n, inv, bgR, bgL, bgT] = getLayerParams();
-  masks = computeLayers(grayData, n, inv, bgR, bgL, bgT);
-  renderPreview();
-}
-
-function renderPreview() {
-  if (!masks.length) return;
-  const n = getNumLayers();
-  const w = imgW, h = imgH;
-
-  // Remove empty state
+// ─── PAINT AREA ──────────────────────────────────────────────────────────────
+function initPaintArea() {
   emptyState.style.display = 'none';
 
-  // Composite canvas - top-down view
-  let compositeSection = document.getElementById('composite-section');
-  if (!compositeSection) {
+  if (!document.getElementById('paint-section')) {
     previewArea.innerHTML = `
-      <div id="composite-section">
-        <div class="preview-section-title">Top-Down Composite View</div>
-        <div class="composite-wrap">
-          <canvas id="composite-canvas"></canvas>
-          <div class="composite-label">Brightest layer color shown per pixel</div>
+      <div id="paint-section">
+        <div class="preview-section-title">Paint Layers</div>
+        <div id="palette-row">
+          <span class="palette-label">Active layer:</span>
+          <div id="layer-palette"></div>
         </div>
-        <div class="preview-section-title" style="margin-top:20px">Individual Layers</div>
+        <div id="tol-row">
+          <span class="tol-label">Fill tolerance: <span id="tol-val">30</span></span>
+          <input type="range" id="fill-tol" min="0" max="150" value="30" style="flex:1;min-width:80px">
+        </div>
+        <div id="paint-canvas-wrap">
+          <canvas id="paint-canvas"></canvas>
+        </div>
+        <div id="paint-hint">Click to flood-fill a region · Drag to brush-paint · Eraser unassigns pixels</div>
+        <div class="preview-section-title" style="margin-top:20px">Layer Masks</div>
         <div class="layer-grid" id="layer-grid"></div>
       </div>
     `;
-    compositeSection = document.getElementById('composite-section');
+    document.getElementById('fill-tol').addEventListener('input', function() {
+      document.getElementById('tol-val').textContent = this.value;
+    });
+    setupPaintCanvas();
   }
 
-  const compCanvas = document.getElementById('composite-canvas');
-  compCanvas.width  = w;
-  compCanvas.height = h;
-  const compCtx = compCanvas.getContext('2d');
-  const compImgData = compCtx.createImageData(w, h);
+  const canvas = document.getElementById('paint-canvas');
+  canvas.width = imgW;
+  canvas.height = imgH;
+  refreshCanvas();
+  updatePalette();
+  renderLayerCards();
+}
 
-  // For composite: each pixel gets color of highest active layer
-  for (let i = 0; i < w*h; i++) {
-    let topLayer = -1;
-    for (let k = n-1; k >= 0; k--) {
-      if (masks[k][i]) { topLayer = k; break; }
-    }
-    let r=30, g=30, b=30;
-    if (topLayer >= 0) {
-      [r,g,b] = hexToRgb(getLayerColor(topLayer));
-    }
-    compImgData.data[i*4+0] = r;
-    compImgData.data[i*4+1] = g;
-    compImgData.data[i*4+2] = b;
-    compImgData.data[i*4+3] = 255;
+let _pmDown = false, _pmDrag = false, _pmDownX = 0, _pmDownY = 0;
+let _pmLastX = -1, _pmLastY = -1, _pmRaf = false;
+
+function setupPaintCanvas() {
+  const canvas = document.getElementById('paint-canvas');
+  if (!canvas) return;
+
+  function onDown(cx, cy) {
+    _pmDown = true; _pmDrag = false;
+    _pmDownX = cx; _pmDownY = cy;
+    _pmLastX = -1; _pmLastY = -1;
   }
-  compCtx.putImageData(compImgData, 0, 0);
+  function onMove(cx, cy) {
+    if (!_pmDown) return;
+    const dx = cx - _pmDownX, dy = cy - _pmDownY;
+    if (dx*dx + dy*dy > 16) _pmDrag = true;
+    if (_pmDrag) {
+      const [x, y] = canvasToPixel(canvas, {clientX: cx, clientY: cy});
+      if (x !== _pmLastX || y !== _pmLastY) {
+        paintPixels(x, y); _pmLastX = x; _pmLastY = y;
+        if (!_pmRaf) { _pmRaf = true; requestAnimationFrame(() => { _pmRaf = false; updateOverlay(); }); }
+      }
+    }
+  }
+  function onUp(cx, cy) {
+    if (!_pmDown) return;
+    _pmDown = false;
+    if (!_pmDrag) {
+      const [x, y] = canvasToPixel(canvas, {clientX: cx, clientY: cy});
+      floodFill(x, y);
+    } else {
+      updateOverlay(); buildMasksFromMap(); renderLayerCards();
+    }
+  }
 
-  // Individual layer cards
+  canvas.addEventListener('mousedown', e => { e.preventDefault(); onDown(e.clientX, e.clientY); });
+  canvas.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+  canvas.addEventListener('mouseup',   e => onUp(e.clientX, e.clientY));
+  canvas.addEventListener('mouseleave', () => { if (_pmDown && _pmDrag) { _pmDown = false; updateOverlay(); buildMasksFromMap(); renderLayerCards(); } });
+
+  canvas.addEventListener('touchstart', e => { e.preventDefault(); const t=e.touches[0]; onDown(t.clientX, t.clientY); }, {passive:false});
+  canvas.addEventListener('touchmove',  e => { e.preventDefault(); const t=e.touches[0]; onMove(t.clientX, t.clientY); }, {passive:false});
+  canvas.addEventListener('touchend',   e => { e.preventDefault(); const t=e.changedTouches[0]; onUp(t.clientX, t.clientY); }, {passive:false});
+}
+
+// ─── LAYER CARDS ─────────────────────────────────────────────────────────────
+function renderLayerCards() {
   const grid = document.getElementById('layer-grid');
-  grid.innerHTML = '';
+  if (!grid) return;
+  const n = getNumLayers();
+  const w = imgW, h = imgH;
   const lh = getLayerHeight();
+  grid.innerHTML = '';
+
   for (let k = 0; k < n; k++) {
     const z0 = (k * lh).toFixed(1);
     const color = getLayerColor(k);
@@ -1288,39 +1417,24 @@ function renderPreview() {
     card.className = 'layer-card';
 
     const cvs = document.createElement('canvas');
-    cvs.width  = w;
-    cvs.height = h;
+    cvs.width = w; cvs.height = h;
     const ctx = cvs.getContext('2d');
     const id  = ctx.createImageData(w, h);
-    const mask = masks[k];
+    const mask = masks[k] || new Uint8Array(w*h);
     for (let i = 0; i < w*h; i++) {
-      if (mask[i]) {
-        id.data[i*4+0] = cr;
-        id.data[i*4+1] = cg;
-        id.data[i*4+2] = cb;
-        id.data[i*4+3] = 255;
-      } else {
-        id.data[i*4+0] = 20;
-        id.data[i*4+1] = 20;
-        id.data[i*4+2] = 20;
-        id.data[i*4+3] = 255;
-      }
+      if (mask[i]) { id.data[i*4]=cr; id.data[i*4+1]=cg; id.data[i*4+2]=cb; id.data[i*4+3]=255; }
+      else { id.data[i*4]=20; id.data[i*4+1]=20; id.data[i*4+2]=20; id.data[i*4+3]=255; }
     }
     ctx.putImageData(id, 0, 0);
 
-    const activeCount = mask.reduce((s,v) => s+v, 0);
-    const pct = ((activeCount / (w*h)) * 100).toFixed(1);
+    const cnt = mask.reduce((s,v) => s+v, 0);
+    const pct = ((cnt / (w*h||1)) * 100).toFixed(1);
 
     card.appendChild(cvs);
     const lbl = document.createElement('div');
     lbl.className = 'layer-card-label';
-    lbl.innerHTML = `
-      <div class="layer-card-swatch" style="background:${color}"></div>
-      <div class="layer-card-info">
-        <strong>Layer ${k+1}</strong>
-        z=${z0}mm · ${pct}%
-      </div>
-    `;
+    lbl.innerHTML = `<div class="layer-card-swatch" style="background:${color}"></div>
+      <div class="layer-card-info"><strong>Layer ${k+1}</strong>z=${z0}mm · ${pct}%</div>`;
     card.appendChild(lbl);
 
     const btnWrap = document.createElement('div');
@@ -1332,9 +1446,37 @@ function renderPreview() {
     btn3d.addEventListener('click', () => window.openLayerViewer && window.openLayerViewer(k));
     btnWrap.appendChild(btn3d);
     card.appendChild(btnWrap);
-
     grid.appendChild(card);
   }
+
+  document.getElementById('btn-preview-3d').disabled = !masks.length;
+}
+
+// ─── UPDATE PREVIEW ──────────────────────────────────────────────────────────
+function updatePreview() {
+  if (!imageEl) return;
+  const res = getResolution();
+  const src = imageEl;
+  const aspect = src.naturalWidth / src.naturalHeight;
+  let w = res, h = Math.max(1, Math.round(res / aspect));
+  if (aspect < 1) { h = res; w = Math.max(1, Math.round(res * aspect)); }
+
+  const off = document.createElement('canvas');
+  off.width = w; off.height = h;
+  off.getContext('2d').drawImage(src, 0, 0, w, h);
+  const raw = new Uint8Array(off.getContext('2d').getImageData(0, 0, w, h).data);
+
+  const sizeChanged = (w !== imgW || h !== imgH);
+  imgW = w; imgH = h;
+  rawRGBA = raw;
+
+  if (sizeChanged || !pixelLayerMap || pixelLayerMap.length !== w*h) {
+    pixelLayerMap = new Int8Array(w*h).fill(-1);
+  }
+  overlayImgData = new ImageData(w, h);
+
+  buildMasksFromMap();
+  initPaintArea();
 }
 
 // ─── GENERATION ───────────────────────────────────────────────────────────────
@@ -1347,49 +1489,30 @@ async function generateSTLs() {
 
   const n = getNumLayers();
   const lh = getLayerHeight();
-  const pW = getPrintWidth();
-  const pH = getPrintHeight();
-  const colors = [];
-  for (let k = 0; k < n; k++) colors.push(getLayerColor(k));
-
-  // Recompute masks at current settings
-  const res = getResolution();
-  const imgDataResult = getImageData(res);
-  imgW = imgDataResult.width;
-  imgH = imgDataResult.height;
-  grayData = computeGray(imgDataResult);
-  const [, inv, bgR, bgL, bgT] = getLayerParams();
-  masks = computeLayers(grayData, n, inv, bgR, bgL, bgT);
-
-  const pixW = pW / imgW;
-  const pixH = pH / imgH;
+  const pW = getPrintWidth(), pH = getPrintHeight();
+  const colors = Array.from({length: n}, (_, k) => getLayerColor(k));
+  const pixW = pW / imgW, pixH = pH / imgH;
 
   setStatus('Building STL files…', 0);
-
   const zip = new JSZip();
   const folder = zip.folder('3d_layers');
 
   for (let k = 0; k < n; k++) {
-    const pct = Math.round(((k) / n) * 90);
-    setStatus(`Generating layer ${k+1} of ${n}…`, pct);
-    // yield to UI
+    setStatus(`Generating layer ${k+1} of ${n}…`, Math.round(k / n * 90));
     await new Promise(r => setTimeout(r, 0));
-
     const z0 = (k * lh).toFixed(1);
-    const fname = `layer_${String(k+1).padStart(2,'0')}_z${z0}mm.stl`;
-    const stlData = buildSTL(masks[k], imgW, imgH, pixW, pixH, k, lh);
-    folder.file(fname, stlData);
+    folder.file(`layer_${String(k+1).padStart(2,'0')}_z${z0}mm.stl`,
+      buildSTL(masks[k], imgW, imgH, pixW, pixH, k, lh));
   }
 
   setStatus('Adding README…', 90);
   await new Promise(r => setTimeout(r, 0));
-  const readme = buildReadme(n, lh, pW, pH, imgW, imgH, colors);
-  folder.file('README.txt', readme);
+  folder.file('README.txt', buildReadme(n, lh, pW, pH, imgW, imgH, colors));
 
   setStatus('Compressing ZIP…', 92);
   await new Promise(r => setTimeout(r, 0));
-  zipData = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
-    (meta) => setStatus(`Compressing… ${meta.percent.toFixed(0)}%`, 92 + meta.percent * 0.08));
+  zipData = await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}},
+    m => setStatus(`Compressing… ${m.percent.toFixed(0)}%`, 92 + m.percent * 0.08));
 
   generationDone = true;
   btnDownload.disabled = false;
@@ -1400,10 +1523,7 @@ async function generateSTLs() {
 function downloadZip() {
   if (!zipData) return;
   const url = URL.createObjectURL(zipData);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = '3d_layers.zip';
-  a.click();
+  const a = document.createElement('a'); a.href = url; a.download = '3d_layers.zip'; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
@@ -1413,77 +1533,74 @@ function setStatus(msg, pct) {
 }
 
 // ─── EVENT WIRING ─────────────────────────────────────────────────────────────
-
-// Drag-and-drop
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropZone.classList.remove('dragover');
+  e.preventDefault(); dropZone.classList.remove('dragover');
   const file = e.dataTransfer.files[0];
   if (file && file.type.startsWith('image/')) loadImage(file);
 });
-
-fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) loadImage(fileInput.files[0]);
-});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadImage(fileInput.files[0]); });
 
 function loadImage(file) {
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.onload = () => {
     if (imageEl) URL.revokeObjectURL(imageEl._blobUrl);
-    imageEl = img;
-    imageEl._blobUrl = url;
-    thumbImg.src = url;
-    thumbWrap.style.display = 'block';
+    imageEl = img; imageEl._blobUrl = url;
+    thumbImg.src = url; thumbWrap.style.display = 'block';
     imgInfo.textContent = `${img.naturalWidth} × ${img.naturalHeight}px · ${(file.size/1024).toFixed(0)}KB`;
     btnGenerate.disabled = false;
-    setStatus('Image loaded. Adjust settings then generate.', 0);
-    generationDone = false;
-    btnDownload.disabled = true;
+    setStatus('Image loaded. Click regions to assign them to layers.', 0);
+    generationDone = false; btnDownload.disabled = true;
+    imgW = 0; imgH = 0; // force fresh pixelLayerMap on first load
     updatePreview();
   };
-  img.onerror = () => {
-    alert('Failed to load image');
-    URL.revokeObjectURL(url);
-  };
+  img.onerror = () => { alert('Failed to load image'); URL.revokeObjectURL(url); };
   img.src = url;
 }
 
-// Sliders
 numLayersEl.addEventListener('input', () => {
   numLayersVal.textContent = numLayersEl.value;
+  const n = getNumLayers();
+  if (pixelLayerMap) {
+    let changed = false;
+    for (let i = 0; i < pixelLayerMap.length; i++) {
+      if (pixelLayerMap[i] >= n) { pixelLayerMap[i] = -1; changed = true; }
+    }
+    if (activeLayer >= n) { activeLayer = n - 1; }
+    if (changed) buildMasksFromMap();
+  }
   updateColorRows();
-  updatePreview();
+  if (overlayImgData) { updateOverlay(); renderLayerCards(); }
 });
 
 layerHeightEl.addEventListener('input', () => {
   layerHeightVal.textContent = parseFloat(layerHeightEl.value).toFixed(1) + 'mm';
-  // Update z labels in color rows
-  const n = getNumLayers();
   const lh = getLayerHeight();
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < getNumLayers(); k++) {
     const zEl = document.querySelector(`#color-rows .color-row:nth-child(${k+1}) .layer-z`);
     if (zEl) zEl.textContent = `z=${(k*lh).toFixed(1)}mm`;
   }
-  updatePreview();
+  renderLayerCards();
 });
 
 resolutionEl.addEventListener('input', () => {
   resolutionVal.textContent = resolutionEl.value + 'px';
   document.getElementById('res-warning').style.display = parseInt(resolutionEl.value) > 350 ? 'block' : 'none';
+  if (!imageEl) return;
+  const hasWork = pixelLayerMap && pixelLayerMap.some(v => v >= 0);
+  if (hasWork && !confirm('Changing resolution will clear all layer assignments. Continue?')) {
+    resolutionEl.value = imgW >= imgH ? imgW : imgH;
+    resolutionVal.textContent = resolutionEl.value + 'px';
+    return;
+  }
+  imgW = 0; imgH = 0;
   updatePreview();
 });
 
-printWidthEl.addEventListener('change', () => updatePreview());
-printHeightEl.addEventListener('change', () => updatePreview());
-
-document.getElementById('layer-order').addEventListener('change', () => updatePreview());
-
-// Edge style / smoothing affect the 3D mesh + STL (not the 2D mask preview).
-const edgeModeEl  = document.getElementById('edge-mode');
-const smoothingEl = document.getElementById('smoothing');
+const edgeModeEl   = document.getElementById('edge-mode');
+const smoothingEl  = document.getElementById('smoothing');
 const smoothingRow = document.getElementById('smoothing-row');
 edgeModeEl.addEventListener('change', () => {
   smoothingRow.style.display = edgeModeEl.value === 'blocky' ? 'none' : 'flex';
@@ -1492,48 +1609,18 @@ smoothingEl.addEventListener('input', () => {
   document.getElementById('smoothing-val').textContent = smoothingEl.value;
 });
 
-const bgRemoveEl   = document.getElementById('bg-remove');
-const bgOptionsEl  = document.getElementById('bg-options');
-const bgTypeEl     = document.getElementById('bg-type');
-const bgThreshEl   = document.getElementById('bg-threshold');
-const bgThreshVal  = document.getElementById('bg-threshold-val');
-
-bgRemoveEl.addEventListener('change', () => {
-  bgOptionsEl.classList.toggle('visible', bgRemoveEl.checked);
-  updatePreview();
-});
-bgTypeEl.addEventListener('change', () => updatePreview());
-bgThreshEl.addEventListener('input', () => {
-  bgThreshVal.textContent = Math.round(parseFloat(bgThreshEl.value) * 100) + '%';
-  updatePreview();
-});
-
-// Buttons
 btnGenerate.addEventListener('click', generateSTLs);
 btnDownload.addEventListener('click', downloadZip);
-
 document.getElementById('btn-preview-3d').addEventListener('click', () => {
   if (window.openLayerViewer) window.openLayerViewer(-1);
 });
 
-// Expose state/functions for the Three.js viewer module
 window._3dlm = {
   get masks() { return masks; },
   get imgW()  { return imgW; },
   get imgH()  { return imgH; },
-  getNumLayers,
-  getPrintWidth,
-  getPrintHeight,
-  getLayerHeight,
-  getLayerColor,
+  getNumLayers, getPrintWidth, getPrintHeight, getLayerHeight, getLayerColor,
   buildTriangles: buildLayerTriangles,
-};
-
-// Enable the 3D preview buttons whenever a preview has been computed
-const _origRenderPreview = renderPreview;
-renderPreview = function() {
-  _origRenderPreview();
-  document.getElementById('btn-preview-3d').disabled = !masks.length;
 };
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
