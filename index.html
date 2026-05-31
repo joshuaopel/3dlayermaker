@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Layer Maker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3450;
+    --accent: #4f8ef7;
+    --accent2: #6c63ff;
+    --text: #e8eaf0;
+    --text-muted: #7a80a0;
+    --success: #4caf82;
+    --danger: #e05a5a;
+    --radius: 10px;
+    --shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* HEADER */
+  header {
+    background: linear-gradient(135deg, #1a1d27 0%, #1e2235 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  header h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    background: linear-gradient(90deg, #4f8ef7, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.02em;
+  }
+  .badge {
+    background: linear-gradient(135deg, #00ae42, #00c851);
+    color: white;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 20px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  header .subtitle {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+  }
+
+  /* LAYOUT */
+  .app-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    height: calc(100vh - 57px);
+  }
+
+  /* LEFT PANEL */
+  .left-panel {
+    width: 340px;
+    min-width: 340px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* RIGHT PANEL */
+  .right-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* SECTION CARDS */
+  .section-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .section-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+  }
+
+  /* DROP ZONE */
+  #drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 24px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--bg);
+  }
+  #drop-zone:hover, #drop-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(79,142,247,0.06);
+  }
+  #drop-zone .drop-icon {
+    font-size: 2rem;
+    margin-bottom: 8px;
+    opacity: 0.5;
+  }
+  #drop-zone p { color: var(--text-muted); font-size: 0.85rem; }
+  #drop-zone .hint { font-size: 0.75rem; color: #555; margin-top: 4px; }
+  #file-input { display: none; }
+
+  #thumb-wrap {
+    display: none;
+    margin-top: 12px;
+    text-align: center;
+  }
+  #thumb-wrap img {
+    max-width: 100%;
+    max-height: 140px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    object-fit: contain;
+  }
+  #img-info {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 6px;
+  }
+
+  /* CONTROLS */
+  .control-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .control-row:last-child { margin-bottom: 0; }
+  .control-label {
+    font-size: 0.84rem;
+    color: var(--text);
+    min-width: 100px;
+  }
+  .control-value {
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--accent);
+    min-width: 40px;
+    text-align: right;
+  }
+
+  input[type=range] {
+    -webkit-appearance: none;
+    flex: 1;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+  input[type=number] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 5px 8px;
+    font-size: 0.84rem;
+    width: 80px;
+    text-align: right;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input[type=number]:focus { border-color: var(--accent); }
+
+  /* DIM INPUTS */
+  .dim-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .dim-field label {
+    display: block;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .dim-field input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 6px 10px;
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .dim-field input:focus { border-color: var(--accent); }
+
+  /* COLOR ROWS */
+  #color-rows { display: flex; flex-direction: column; gap: 8px; }
+  .color-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+  }
+  .color-row .layer-num {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    min-width: 60px;
+  }
+  .color-row input[type=color] {
+    width: 36px;
+    height: 26px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    background: none;
+    padding: 0;
+  }
+  .color-row .color-swatch {
+    flex: 1;
+    height: 26px;
+    border-radius: 5px;
+    border: 1px solid rgba(255,255,255,0.1);
+    transition: background 0.2s;
+  }
+  .color-row .layer-z {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    min-width: 55px;
+    text-align: right;
+  }
+
+  /* BUTTONS */
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    width: 100%;
+  }
+  .btn:disabled { opacity: 0.38; cursor: not-allowed; }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: white;
+    box-shadow: 0 2px 12px rgba(79,142,247,0.35);
+  }
+  .btn-primary:not(:disabled):hover {
+    filter: brightness(1.12);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 18px rgba(79,142,247,0.5);
+  }
+  .btn-success {
+    background: linear-gradient(135deg, var(--success), #3a9e6c);
+    color: white;
+    box-shadow: 0 2px 12px rgba(76,175,130,0.3);
+  }
+  .btn-success:not(:disabled):hover {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+  }
+  .btn-group { display: flex; flex-direction: column; gap: 8px; }
+
+  /* PROGRESS */
+  .progress-wrap {
+    background: var(--bg);
+    border-radius: 6px;
+    height: 8px;
+    overflow: hidden;
+    margin-top: 10px;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 6px;
+    width: 0%;
+    transition: width 0.2s;
+  }
+  #status-text {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 6px;
+    min-height: 18px;
+  }
+
+  /* PREVIEW RIGHT */
+  .preview-section-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+  .composite-wrap {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  #composite-canvas {
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    max-width: 100%;
+    max-height: 350px;
+    image-rendering: pixelated;
+    display: block;
+    margin: 0 auto;
+    background: #111;
+  }
+  .composite-label {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    margin-top: 8px;
+  }
+
+  .layer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
+  }
+  .layer-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .layer-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+  }
+  .layer-card canvas {
+    width: 100%;
+    display: block;
+    image-rendering: pixelated;
+    aspect-ratio: 1;
+    object-fit: contain;
+    background: #111;
+  }
+  .layer-card-label {
+    padding: 7px 10px;
+    font-size: 0.76rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .layer-card-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .layer-card-info {
+    color: var(--text-muted);
+    line-height: 1.3;
+  }
+  .layer-card-info strong { color: var(--text); display: block; }
+
+  /* EMPTY STATE */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+    text-align: center;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    flex: 1;
+  }
+  .empty-state .icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.3; }
+  .empty-state p { font-size: 0.9rem; }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #445; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>3D Layer Maker</h1>
+  <span class="badge">Bambu Studio</span>
+  <span class="subtitle">Topographic stacked STL generator</span>
+</header>
+
+<div class="app-layout">
+  <!-- LEFT PANEL -->
+  <div class="left-panel">
+
+    <!-- Image Upload -->
+    <div class="section-card">
+      <div class="section-title">Image</div>
+      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="drop-icon">🖼️</div>
+        <p>Drop image here or click to browse</p>
+        <p class="hint">PNG, JPG, GIF, WebP supported</p>
+      </div>
+      <input type="file" id="file-input" accept="image/*">
+      <div id="thumb-wrap">
+        <img id="thumb" src="" alt="Preview">
+        <div id="img-info"></div>
+      </div>
+    </div>
+
+    <!-- Layer Settings -->
+    <div class="section-card">
+      <div class="section-title">Layer Settings</div>
+      <div class="control-row">
+        <span class="control-label">Num Layers</span>
+        <input type="range" id="num-layers" min="2" max="8" value="4" step="1">
+        <span class="control-value" id="num-layers-val">4</span>
+      </div>
+      <div class="control-row">
+        <span class="control-label">Thickness</span>
+        <input type="range" id="layer-height" min="0.4" max="6" value="2.0" step="0.1">
+        <span class="control-value" id="layer-height-val">2.0mm</span>
+      </div>
+      <div class="control-row">
+        <span class="control-label">Resolution</span>
+        <input type="range" id="resolution" min="30" max="200" value="100" step="5">
+        <span class="control-value" id="resolution-val">100px</span>
+      </div>
+    </div>
+
+    <!-- Print Dimensions -->
+    <div class="section-card">
+      <div class="section-title">Print Dimensions</div>
+      <div class="dim-grid">
+        <div class="dim-field">
+          <label>Width (mm)</label>
+          <input type="number" id="print-width" value="100" min="10" max="500">
+        </div>
+        <div class="dim-field">
+          <label>Height (mm)</label>
+          <input type="number" id="print-height" value="100" min="10" max="500">
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer Colors -->
+    <div class="section-card">
+      <div class="section-title">Layer Colors (bottom → top)</div>
+      <div id="color-rows"></div>
+    </div>
+
+    <!-- Generate + Download -->
+    <div class="section-card">
+      <div class="section-title">Export</div>
+      <div class="btn-group">
+        <button class="btn btn-primary" id="btn-generate" disabled>
+          ⚙ Generate STL Files
+        </button>
+        <button class="btn btn-success" id="btn-download" disabled>
+          ⬇ Download ZIP
+        </button>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+      <div id="status-text">Upload an image to get started</div>
+    </div>
+
+  </div><!-- /left-panel -->
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel">
+    <div id="preview-area">
+      <div class="empty-state" id="empty-state">
+        <div class="icon">🗂️</div>
+        <p>Upload an image to see the layer preview</p>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app-layout -->
+
+<script>
+// ─── STATE ───────────────────────────────────────────────────────────────────
+const DEFAULT_COLORS = ['#1a1a1a','#2d3561','#4464ad','#66b2b2','#a8d8a8','#f9e784','#f4845f','#f5f5f5'];
+let imageEl = null;
+let imgW = 0, imgH = 0;
+let grayData = null;       // Float32Array of grayscale [0..1]
+let masks = [];            // Array of Uint8Array per layer
+let zipData = null;        // Generated ZIP blob
+let generationDone = false;
+
+// ─── DOM REFS ─────────────────────────────────────────────────────────────────
+const dropZone     = document.getElementById('drop-zone');
+const fileInput    = document.getElementById('file-input');
+const thumbWrap    = document.getElementById('thumb-wrap');
+const thumbImg     = document.getElementById('thumb');
+const imgInfo      = document.getElementById('img-info');
+const numLayersEl  = document.getElementById('num-layers');
+const numLayersVal = document.getElementById('num-layers-val');
+const layerHeightEl  = document.getElementById('layer-height');
+const layerHeightVal = document.getElementById('layer-height-val');
+const resolutionEl   = document.getElementById('resolution');
+const resolutionVal  = document.getElementById('resolution-val');
+const printWidthEl   = document.getElementById('print-width');
+const printHeightEl  = document.getElementById('print-height');
+const colorRows    = document.getElementById('color-rows');
+const btnGenerate  = document.getElementById('btn-generate');
+const btnDownload  = document.getElementById('btn-download');
+const progressBar  = document.getElementById('progress-bar');
+const statusText   = document.getElementById('status-text');
+const previewArea  = document.getElementById('preview-area');
+const emptyState   = document.getElementById('empty-state');
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function getNumLayers()    { return parseInt(numLayersEl.value); }
+function getLayerHeight()  { return parseFloat(layerHeightEl.value); }
+function getResolution()   { return parseInt(resolutionEl.value); }
+function getPrintWidth()   { return parseFloat(printWidthEl.value) || 100; }
+function getPrintHeight()  { return parseFloat(printHeightEl.value) || 100; }
+function getLayerColor(k)  {
+  const inp = document.getElementById('color-'+k);
+  return inp ? inp.value : DEFAULT_COLORS[k % DEFAULT_COLORS.length];
+}
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return [r,g,b];
+}
+
+// ─── COLOR ROWS ───────────────────────────────────────────────────────────────
+function updateColorRows() {
+  const n = getNumLayers();
+  const lh = getLayerHeight();
+  // Save existing colours
+  const existing = [];
+  for (let k = 0; k < 8; k++) {
+    const inp = document.getElementById('color-'+k);
+    existing[k] = inp ? inp.value : DEFAULT_COLORS[k % DEFAULT_COLORS.length];
+  }
+  colorRows.innerHTML = '';
+  for (let k = 0; k < n; k++) {
+    const color = existing[k] || DEFAULT_COLORS[k % DEFAULT_COLORS.length];
+    const z0 = (k * lh).toFixed(1);
+    const row = document.createElement('div');
+    row.className = 'color-row';
+    row.innerHTML = `
+      <span class="layer-num">Layer ${k+1}</span>
+      <input type="color" id="color-${k}" value="${color}">
+      <div class="color-swatch" id="swatch-${k}" style="background:${color}"></div>
+      <span class="layer-z">z=${z0}mm</span>
+    `;
+    colorRows.appendChild(row);
+    const inp = row.querySelector('input[type=color]');
+    const sw  = row.querySelector('.color-swatch');
+    inp.addEventListener('input', () => {
+      sw.style.background = inp.value;
+      updatePreview();
+    });
+  }
+}
+
+// ─── IMAGE PROCESSING ─────────────────────────────────────────────────────────
+function getImageData(res) {
+  // Scale image to fit within res×res maintaining aspect ratio
+  const src = imageEl;
+  const aspect = src.naturalWidth / src.naturalHeight;
+  let w, h;
+  if (aspect >= 1) {
+    w = res;
+    h = Math.max(1, Math.round(res / aspect));
+  } else {
+    h = res;
+    w = Math.max(1, Math.round(res * aspect));
+  }
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = w;
+  offscreen.height = h;
+  const ctx = offscreen.getContext('2d');
+  ctx.drawImage(src, 0, 0, w, h);
+  return { data: ctx.getImageData(0, 0, w, h).data, width: w, height: h };
+}
+
+function computeGray(imageDataResult) {
+  const { data, width, height } = imageDataResult;
+  const n = width * height;
+  const gray = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = data[i*4+0], g = data[i*4+1], b = data[i*4+2];
+    gray[i] = (0.299*r + 0.587*g + 0.114*b) / 255;
+  }
+  return gray;
+}
+
+function computeLayers(gray, numLayers) {
+  const n = gray.length;
+  const result = [];
+  for (let k = 0; k < numLayers; k++) {
+    const threshold = k / numLayers;
+    const mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      mask[i] = gray[i] >= threshold ? 1 : 0;
+    }
+    result.push(mask);
+  }
+  return result;
+}
+
+// ─── STL GENERATION ──────────────────────────────────────────────────────────
+function buildSTL(mask, w, h, pixW, pixH, layerIndex, layerHeight) {
+  // Count triangles: each voxel contributes up to 12 triangles (6 faces × 2)
+  // We'll do two passes: count then fill
+  const z0 = layerIndex * layerHeight;
+  const z1 = z0 + layerHeight;
+
+  // Collect all triangles
+  const tris = [];
+
+  function addTri(ax,ay,az, bx,by,bz, cx,cy,cz) {
+    // Compute normal via cross product
+    const ux=bx-ax, uy=by-ay, uz=bz-az;
+    const vx=cx-ax, vy=cy-ay, vz=cz-az;
+    const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+    const len=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
+    tris.push(nx/len, ny/len, nz/len,
+              ax,ay,az, bx,by,bz, cx,cy,cz);
+  }
+
+  for (let row = 0; row < h; row++) {
+    for (let col = 0; col < w; col++) {
+      if (!mask[row*w + col]) continue;
+
+      const x0 = col * pixW;
+      const x1 = x0 + pixW;
+      const y0 = (h - 1 - row) * pixH;
+      const y1 = y0 + pixH;
+
+      // Top (+Z): always emit
+      addTri(x0,y0,z1, x1,y0,z1, x1,y1,z1);
+      addTri(x0,y0,z1, x1,y1,z1, x0,y1,z1);
+
+      // Bottom (-Z): always emit
+      addTri(x0,y0,z0, x0,y1,z0, x1,y1,z0);
+      addTri(x0,y0,z0, x1,y1,z0, x1,y0,z0);
+
+      // +Y face (at y1): emit if row==0 OR north neighbor is inactive
+      if (row === 0 || !mask[(row-1)*w + col]) {
+        addTri(x0,y1,z0, x0,y1,z1, x1,y1,z1);
+        addTri(x0,y1,z0, x1,y1,z1, x1,y1,z0);
+      }
+
+      // -Y face (at y0): emit if row==h-1 OR south neighbor is inactive
+      if (row === h-1 || !mask[(row+1)*w + col]) {
+        addTri(x0,y0,z0, x1,y0,z0, x1,y0,z1);
+        addTri(x0,y0,z0, x1,y0,z1, x0,y0,z1);
+      }
+
+      // -X face (at x0): emit if col==0 OR west neighbor is inactive
+      if (col === 0 || !mask[row*w + col-1]) {
+        addTri(x0,y0,z0, x0,y0,z1, x0,y1,z1);
+        addTri(x0,y0,z0, x0,y1,z1, x0,y1,z0);
+      }
+
+      // +X face (at x1): emit if col==w-1 OR east neighbor is inactive
+      if (col === w-1 || !mask[row*w + col+1]) {
+        addTri(x1,y0,z0, x1,y1,z0, x1,y1,z1);
+        addTri(x1,y0,z0, x1,y1,z1, x1,y0,z1);
+      }
+    }
+  }
+
+  const numTris = tris.length / 12; // 12 floats per tri (3 normal + 9 vertex)
+  const buf = new ArrayBuffer(80 + 4 + numTris * 50);
+  const view = new DataView(buf);
+  // Header: 80 bytes zeros (already zero)
+  // Triangle count
+  view.setUint32(80, numTris, true);
+  let offset = 84;
+  for (let i = 0; i < tris.length; i += 12) {
+    // Normal
+    view.setFloat32(offset,    tris[i+0], true); offset+=4;
+    view.setFloat32(offset,    tris[i+1], true); offset+=4;
+    view.setFloat32(offset,    tris[i+2], true); offset+=4;
+    // Vertex 1
+    view.setFloat32(offset,    tris[i+3], true); offset+=4;
+    view.setFloat32(offset,    tris[i+4], true); offset+=4;
+    view.setFloat32(offset,    tris[i+5], true); offset+=4;
+    // Vertex 2
+    view.setFloat32(offset,    tris[i+6], true); offset+=4;
+    view.setFloat32(offset,    tris[i+7], true); offset+=4;
+    view.setFloat32(offset,    tris[i+8], true); offset+=4;
+    // Vertex 3
+    view.setFloat32(offset,    tris[i+9],  true); offset+=4;
+    view.setFloat32(offset,    tris[i+10], true); offset+=4;
+    view.setFloat32(offset,    tris[i+11], true); offset+=4;
+    // Attribute byte count
+    view.setUint16(offset, 0, true); offset+=2;
+  }
+  return new Uint8Array(buf);
+}
+
+// ─── README ───────────────────────────────────────────────────────────────────
+function buildReadme(numLayers, layerHeight, printWidth, printHeight, imgW, imgH, colors) {
+  const lines = [
+    '3D Layer Maker - Print Instructions',
+    '====================================',
+    '',
+    'Files generated: ' + numLayers + ' STL layers',
+    'Print dimensions: ' + printWidth + ' x ' + printHeight + ' mm',
+    'Layer height: ' + layerHeight + ' mm',
+    'Image resolution used: ' + imgW + ' x ' + imgH + ' px',
+    '',
+    'PRINTING INSTRUCTIONS',
+    '---------------------',
+    '1. Print each layer in the listed filament color.',
+    '2. Stack layers in order from layer_01 (bottom) to layer_' + String(numLayers).padStart(2,'0') + ' (top).',
+    '3. Use a flat surface for alignment.',
+    '4. Optionally glue layers with a thin CA glue or friction-fit.',
+    '',
+    'LAYER ORDER (bottom to top):',
+    '----------------------------',
+  ];
+  for (let k = 0; k < numLayers; k++) {
+    const z0 = (k * layerHeight).toFixed(1);
+    const fname = `layer_${String(k+1).padStart(2,'0')}_z${z0}mm.stl`;
+    lines.push(`  ${fname}  →  Color: ${colors[k]}`);
+  }
+  lines.push('');
+  lines.push('HOW IT WORKS');
+  lines.push('------------');
+  lines.push('The image is converted to grayscale. Brightness is divided into ' + numLayers + ' bands.');
+  lines.push('Layer 1 (bottom) covers the full print area (background).');
+  lines.push('Each subsequent layer only covers pixels brighter than the previous threshold.');
+  lines.push('Bright image areas have more layers stacked = taller = visible from above.');
+  lines.push('');
+  lines.push('Generated with 3D Layer Maker — https://github.com/joshuaopel');
+  return lines.join('\n');
+}
+
+// ─── PREVIEW ──────────────────────────────────────────────────────────────────
+function updatePreview() {
+  if (!imageEl) return;
+  const res = getResolution();
+  const imgDataResult = getImageData(res);
+  imgW = imgDataResult.width;
+  imgH = imgDataResult.height;
+  grayData = computeGray(imgDataResult);
+  const n = getNumLayers();
+  masks = computeLayers(grayData, n);
+  renderPreview();
+}
+
+function renderPreview() {
+  if (!masks.length) return;
+  const n = getNumLayers();
+  const w = imgW, h = imgH;
+
+  // Remove empty state
+  emptyState.style.display = 'none';
+
+  // Composite canvas - top-down view
+  let compositeSection = document.getElementById('composite-section');
+  if (!compositeSection) {
+    previewArea.innerHTML = `
+      <div id="composite-section">
+        <div class="preview-section-title">Top-Down Composite View</div>
+        <div class="composite-wrap">
+          <canvas id="composite-canvas"></canvas>
+          <div class="composite-label">Brightest layer color shown per pixel</div>
+        </div>
+        <div class="preview-section-title" style="margin-top:20px">Individual Layers</div>
+        <div class="layer-grid" id="layer-grid"></div>
+      </div>
+    `;
+    compositeSection = document.getElementById('composite-section');
+  }
+
+  const compCanvas = document.getElementById('composite-canvas');
+  compCanvas.width  = w;
+  compCanvas.height = h;
+  const compCtx = compCanvas.getContext('2d');
+  const compImgData = compCtx.createImageData(w, h);
+
+  // For composite: each pixel gets color of highest active layer
+  for (let i = 0; i < w*h; i++) {
+    let topLayer = -1;
+    for (let k = n-1; k >= 0; k--) {
+      if (masks[k][i]) { topLayer = k; break; }
+    }
+    let r=30, g=30, b=30;
+    if (topLayer >= 0) {
+      [r,g,b] = hexToRgb(getLayerColor(topLayer));
+    }
+    compImgData.data[i*4+0] = r;
+    compImgData.data[i*4+1] = g;
+    compImgData.data[i*4+2] = b;
+    compImgData.data[i*4+3] = 255;
+  }
+  compCtx.putImageData(compImgData, 0, 0);
+
+  // Individual layer cards
+  const grid = document.getElementById('layer-grid');
+  grid.innerHTML = '';
+  const lh = getLayerHeight();
+  for (let k = 0; k < n; k++) {
+    const z0 = (k * lh).toFixed(1);
+    const color = getLayerColor(k);
+    const [cr,cg,cb] = hexToRgb(color);
+
+    const card = document.createElement('div');
+    card.className = 'layer-card';
+
+    const cvs = document.createElement('canvas');
+    cvs.width  = w;
+    cvs.height = h;
+    const ctx = cvs.getContext('2d');
+    const id  = ctx.createImageData(w, h);
+    const mask = masks[k];
+    for (let i = 0; i < w*h; i++) {
+      if (mask[i]) {
+        id.data[i*4+0] = cr;
+        id.data[i*4+1] = cg;
+        id.data[i*4+2] = cb;
+        id.data[i*4+3] = 255;
+      } else {
+        id.data[i*4+0] = 20;
+        id.data[i*4+1] = 20;
+        id.data[i*4+2] = 20;
+        id.data[i*4+3] = 255;
+      }
+    }
+    ctx.putImageData(id, 0, 0);
+
+    const activeCount = mask.reduce((s,v) => s+v, 0);
+    const pct = ((activeCount / (w*h)) * 100).toFixed(1);
+
+    card.appendChild(cvs);
+    const lbl = document.createElement('div');
+    lbl.className = 'layer-card-label';
+    lbl.innerHTML = `
+      <div class="layer-card-swatch" style="background:${color}"></div>
+      <div class="layer-card-info">
+        <strong>Layer ${k+1}</strong>
+        z=${z0}mm · ${pct}%
+      </div>
+    `;
+    card.appendChild(lbl);
+    grid.appendChild(card);
+  }
+}
+
+// ─── GENERATION ───────────────────────────────────────────────────────────────
+async function generateSTLs() {
+  if (!imageEl) return;
+  generationDone = false;
+  btnDownload.disabled = true;
+  btnGenerate.disabled = true;
+  zipData = null;
+
+  const n = getNumLayers();
+  const lh = getLayerHeight();
+  const pW = getPrintWidth();
+  const pH = getPrintHeight();
+  const colors = [];
+  for (let k = 0; k < n; k++) colors.push(getLayerColor(k));
+
+  // Recompute masks at current settings
+  const res = getResolution();
+  const imgDataResult = getImageData(res);
+  imgW = imgDataResult.width;
+  imgH = imgDataResult.height;
+  grayData = computeGray(imgDataResult);
+  masks = computeLayers(grayData, n);
+
+  const pixW = pW / imgW;
+  const pixH = pH / imgH;
+
+  setStatus('Building STL files…', 0);
+
+  const zip = new JSZip();
+  const folder = zip.folder('3d_layers');
+
+  for (let k = 0; k < n; k++) {
+    const pct = Math.round(((k) / n) * 90);
+    setStatus(`Generating layer ${k+1} of ${n}…`, pct);
+    // yield to UI
+    await new Promise(r => setTimeout(r, 0));
+
+    const z0 = (k * lh).toFixed(1);
+    const fname = `layer_${String(k+1).padStart(2,'0')}_z${z0}mm.stl`;
+    const stlData = buildSTL(masks[k], imgW, imgH, pixW, pixH, k, lh);
+    folder.file(fname, stlData);
+  }
+
+  setStatus('Adding README…', 90);
+  await new Promise(r => setTimeout(r, 0));
+  const readme = buildReadme(n, lh, pW, pH, imgW, imgH, colors);
+  folder.file('README.txt', readme);
+
+  setStatus('Compressing ZIP…', 92);
+  await new Promise(r => setTimeout(r, 0));
+  zipData = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+    (meta) => setStatus(`Compressing… ${meta.percent.toFixed(0)}%`, 92 + meta.percent * 0.08));
+
+  generationDone = true;
+  btnDownload.disabled = false;
+  btnGenerate.disabled = false;
+  setStatus(`Done! ${n} STL files ready. Click Download ZIP.`, 100);
+}
+
+function downloadZip() {
+  if (!zipData) return;
+  const url = URL.createObjectURL(zipData);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '3d_layers.zip';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function setStatus(msg, pct) {
+  statusText.textContent = msg;
+  progressBar.style.width = pct + '%';
+}
+
+// ─── EVENT WIRING ─────────────────────────────────────────────────────────────
+
+// Drag-and-drop
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) loadImage(file);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) loadImage(fileInput.files[0]);
+});
+
+function loadImage(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    if (imageEl) URL.revokeObjectURL(imageEl._blobUrl);
+    imageEl = img;
+    imageEl._blobUrl = url;
+    thumbImg.src = url;
+    thumbWrap.style.display = 'block';
+    imgInfo.textContent = `${img.naturalWidth} × ${img.naturalHeight}px · ${(file.size/1024).toFixed(0)}KB`;
+    btnGenerate.disabled = false;
+    setStatus('Image loaded. Adjust settings then generate.', 0);
+    generationDone = false;
+    btnDownload.disabled = true;
+    updatePreview();
+  };
+  img.onerror = () => {
+    alert('Failed to load image');
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+}
+
+// Sliders
+numLayersEl.addEventListener('input', () => {
+  numLayersVal.textContent = numLayersEl.value;
+  updateColorRows();
+  updatePreview();
+});
+
+layerHeightEl.addEventListener('input', () => {
+  layerHeightVal.textContent = parseFloat(layerHeightEl.value).toFixed(1) + 'mm';
+  // Update z labels in color rows
+  const n = getNumLayers();
+  const lh = getLayerHeight();
+  for (let k = 0; k < n; k++) {
+    const zEl = document.querySelector(`#color-rows .color-row:nth-child(${k+1}) .layer-z`);
+    if (zEl) zEl.textContent = `z=${(k*lh).toFixed(1)}mm`;
+  }
+  updatePreview();
+});
+
+resolutionEl.addEventListener('input', () => {
+  resolutionVal.textContent = resolutionEl.value + 'px';
+  updatePreview();
+});
+
+printWidthEl.addEventListener('change', () => updatePreview());
+printHeightEl.addEventListener('change', () => updatePreview());
+
+// Buttons
+btnGenerate.addEventListener('click', generateSTLs);
+btnDownload.addEventListener('click', downloadZip);
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+updateColorRows();
+</script>
+</body>
+</html>
