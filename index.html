@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>3D Layer Maker</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"}}
+</script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -462,6 +465,95 @@
   }
   .bg-options.visible { display: flex; }
 
+  /* 3D VIEWER MODAL */
+  #viewer-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0,0,0,0.88);
+    align-items: center;
+    justify-content: center;
+  }
+  #viewer-container {
+    position: relative;
+    width: 92vw;
+    height: 88vh;
+    max-width: 1300px;
+    background: #080a12;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.9);
+  }
+  #viewer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #viewer-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    flex: 1;
+    background: linear-gradient(90deg, #4f8ef7, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .vbtn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 4px 14px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .vbtn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+  .vbtn.vactive { background: var(--accent); border-color: var(--accent); color: white; }
+  .vbtn:disabled { opacity: 0.3; cursor: not-allowed; }
+  #viewer-canvas { flex: 1; width: 100%; display: block; outline: none; }
+  #viewer-hint {
+    padding: 5px;
+    text-align: center;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #viewer-layer-info {
+    position: absolute;
+    bottom: 36px;
+    left: 16px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    max-width: 50%;
+    pointer-events: none;
+  }
+  .layer-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 20px;
+    padding: 3px 9px;
+    font-size: 0.7rem;
+    color: #ccc;
+    backdrop-filter: blur(4px);
+  }
+  .layer-chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+
   /* SCROLLBAR */
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -511,8 +603,11 @@
       </div>
       <div class="control-row">
         <span class="control-label">Resolution</span>
-        <input type="range" id="resolution" min="30" max="200" value="100" step="5">
-        <span class="control-value" id="resolution-val">100px</span>
+        <input type="range" id="resolution" min="30" max="600" value="200" step="10">
+        <span class="control-value" id="resolution-val">200px</span>
+      </div>
+      <div id="res-warning" style="display:none;font-size:0.74rem;color:#f59e0b;margin-top:-6px;margin-bottom:8px;padding:0 2px">
+        ⚠ High resolution — generation may be slow
       </div>
       <div class="control-row">
         <span class="control-label">Bright side</span>
@@ -568,6 +663,9 @@
       <div class="btn-group">
         <button class="btn btn-primary" id="btn-generate" disabled>
           ⚙ Generate STL Files
+        </button>
+        <button class="btn" id="btn-preview-3d" disabled style="background:linear-gradient(135deg,#7c3aed,#a855f7);color:white;box-shadow:0 2px 12px rgba(124,58,237,0.35)">
+          ◈ Preview 3D (All Layers)
         </button>
         <button class="btn btn-success" id="btn-download" disabled>
           ⬇ Download ZIP
@@ -747,94 +845,49 @@ function computeLayers(gray, numLayers, invertLayers, bgRemove, bgIsLight, bgThr
 }
 
 // ─── STL GENERATION ──────────────────────────────────────────────────────────
-function buildSTL(mask, w, h, pixW, pixH, layerIndex, layerHeight) {
-  // Count triangles: each voxel contributes up to 12 triangles (6 faces × 2)
-  // We'll do two passes: count then fill
-  const z0 = layerIndex * layerHeight;
-  const z1 = z0 + layerHeight;
-
-  // Collect all triangles
-  const tris = [];
-
-  function addTri(ax,ay,az, bx,by,bz, cx,cy,cz) {
-    // Compute normal via cross product
-    const ux=bx-ax, uy=by-ay, uz=bz-az;
-    const vx=cx-ax, vy=cy-ay, vz=cz-az;
-    const nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
-    const len=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
-    tris.push(nx/len, ny/len, nz/len,
-              ax,ay,az, bx,by,bz, cx,cy,cz);
-  }
+// Returns Float32Array [x1,y1,z1, x2,y2,z2, x3,y3,z3, ...] — 9 values per triangle, no normals.
+// Shared by the STL exporter and the Three.js 3D viewer.
+function buildTriangles(mask, w, h, pixW, pixH, z0, z1) {
+  const v = [];
+  const t = (ax,ay,az,bx,by,bz,cx,cy,cz) => v.push(ax,ay,az,bx,by,bz,cx,cy,cz);
 
   for (let row = 0; row < h; row++) {
     for (let col = 0; col < w; col++) {
       if (!mask[row*w + col]) continue;
+      const x0=col*pixW, x1=x0+pixW;
+      const y0=(h-1-row)*pixH, y1=y0+pixH;
 
-      const x0 = col * pixW;
-      const x1 = x0 + pixW;
-      const y0 = (h - 1 - row) * pixH;
-      const y1 = y0 + pixH;
-
-      // Top (+Z): always emit
-      addTri(x0,y0,z1, x1,y0,z1, x1,y1,z1);
-      addTri(x0,y0,z1, x1,y1,z1, x0,y1,z1);
-
-      // Bottom (-Z): always emit
-      addTri(x0,y0,z0, x0,y1,z0, x1,y1,z0);
-      addTri(x0,y0,z0, x1,y1,z0, x1,y0,z0);
-
-      // +Y face (at y1): emit if row==0 OR north neighbor is inactive
-      if (row === 0 || !mask[(row-1)*w + col]) {
-        addTri(x0,y1,z0, x0,y1,z1, x1,y1,z1);
-        addTri(x0,y1,z0, x1,y1,z1, x1,y1,z0);
-      }
-
-      // -Y face (at y0): emit if row==h-1 OR south neighbor is inactive
-      if (row === h-1 || !mask[(row+1)*w + col]) {
-        addTri(x0,y0,z0, x1,y0,z0, x1,y0,z1);
-        addTri(x0,y0,z0, x1,y0,z1, x0,y0,z1);
-      }
-
-      // -X face (at x0): emit if col==0 OR west neighbor is inactive
-      if (col === 0 || !mask[row*w + col-1]) {
-        addTri(x0,y0,z0, x0,y0,z1, x0,y1,z1);
-        addTri(x0,y0,z0, x0,y1,z1, x0,y1,z0);
-      }
-
-      // +X face (at x1): emit if col==w-1 OR east neighbor is inactive
-      if (col === w-1 || !mask[row*w + col+1]) {
-        addTri(x1,y0,z0, x1,y1,z0, x1,y1,z1);
-        addTri(x1,y0,z0, x1,y1,z1, x1,y0,z1);
-      }
+      t(x0,y0,z1, x1,y0,z1, x1,y1,z1); t(x0,y0,z1, x1,y1,z1, x0,y1,z1); // top (+Z)
+      t(x0,y0,z0, x0,y1,z0, x1,y1,z0); t(x0,y0,z0, x1,y1,z0, x1,y0,z0); // bottom (-Z)
+      if (row===0||!mask[(row-1)*w+col])   { t(x0,y1,z0,x0,y1,z1,x1,y1,z1); t(x0,y1,z0,x1,y1,z1,x1,y1,z0); } // +Y
+      if (row===h-1||!mask[(row+1)*w+col]) { t(x0,y0,z0,x1,y0,z0,x1,y0,z1); t(x0,y0,z0,x1,y0,z1,x0,y0,z1); } // -Y
+      if (col===0||!mask[row*w+col-1])     { t(x0,y0,z0,x0,y0,z1,x0,y1,z1); t(x0,y0,z0,x0,y1,z1,x0,y1,z0); } // -X
+      if (col===w-1||!mask[row*w+col+1])   { t(x1,y0,z0,x1,y1,z0,x1,y1,z1); t(x1,y0,z0,x1,y1,z1,x1,y0,z1); } // +X
     }
   }
+  return new Float32Array(v);
+}
 
-  const numTris = tris.length / 12; // 12 floats per tri (3 normal + 9 vertex)
+function buildSTL(mask, w, h, pixW, pixH, layerIndex, layerHeight) {
+  const z0 = layerIndex * layerHeight;
+  const verts = buildTriangles(mask, w, h, pixW, pixH, z0, z0 + layerHeight);
+  const numTris = verts.length / 9;
   const buf = new ArrayBuffer(80 + 4 + numTris * 50);
-  const view = new DataView(buf);
-  // Header: 80 bytes zeros (already zero)
-  // Triangle count
-  view.setUint32(80, numTris, true);
-  let offset = 84;
-  for (let i = 0; i < tris.length; i += 12) {
-    // Normal
-    view.setFloat32(offset,    tris[i+0], true); offset+=4;
-    view.setFloat32(offset,    tris[i+1], true); offset+=4;
-    view.setFloat32(offset,    tris[i+2], true); offset+=4;
-    // Vertex 1
-    view.setFloat32(offset,    tris[i+3], true); offset+=4;
-    view.setFloat32(offset,    tris[i+4], true); offset+=4;
-    view.setFloat32(offset,    tris[i+5], true); offset+=4;
-    // Vertex 2
-    view.setFloat32(offset,    tris[i+6], true); offset+=4;
-    view.setFloat32(offset,    tris[i+7], true); offset+=4;
-    view.setFloat32(offset,    tris[i+8], true); offset+=4;
-    // Vertex 3
-    view.setFloat32(offset,    tris[i+9],  true); offset+=4;
-    view.setFloat32(offset,    tris[i+10], true); offset+=4;
-    view.setFloat32(offset,    tris[i+11], true); offset+=4;
-    // Attribute byte count
-    view.setUint16(offset, 0, true); offset+=2;
+  const dv = new DataView(buf);
+  dv.setUint32(80, numTris, true);
+  let off = 84;
+  for (let i = 0; i < verts.length; i += 9) {
+    const ax=verts[i],ay=verts[i+1],az=verts[i+2];
+    const bx=verts[i+3],by=verts[i+4],bz=verts[i+5];
+    const cx=verts[i+6],cy=verts[i+7],cz=verts[i+8];
+    const ux=bx-ax,uy=by-ay,uz=bz-az, vx=cx-ax,vy=cy-ay,vz=cz-az;
+    const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+    const len=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
+    dv.setFloat32(off,nx/len,true);off+=4; dv.setFloat32(off,ny/len,true);off+=4; dv.setFloat32(off,nz/len,true);off+=4;
+    dv.setFloat32(off,ax,true);off+=4; dv.setFloat32(off,ay,true);off+=4; dv.setFloat32(off,az,true);off+=4;
+    dv.setFloat32(off,bx,true);off+=4; dv.setFloat32(off,by,true);off+=4; dv.setFloat32(off,bz,true);off+=4;
+    dv.setFloat32(off,cx,true);off+=4; dv.setFloat32(off,cy,true);off+=4; dv.setFloat32(off,cz,true);off+=4;
+    dv.setUint16(off,0,true);off+=2;
   }
   return new Uint8Array(buf);
 }
@@ -985,6 +1038,17 @@ function renderPreview() {
       </div>
     `;
     card.appendChild(lbl);
+
+    const btnWrap = document.createElement('div');
+    btnWrap.style.cssText = 'padding:4px 8px 8px;display:flex;justify-content:center';
+    const btn3d = document.createElement('button');
+    btn3d.className = 'btn';
+    btn3d.style.cssText = 'background:linear-gradient(135deg,#7c3aed,#a855f7);color:white;font-size:0.75rem;padding:5px 10px;width:auto';
+    btn3d.textContent = '◈ 3D View';
+    btn3d.addEventListener('click', () => window.openLayerViewer && window.openLayerViewer(k));
+    btnWrap.appendChild(btn3d);
+    card.appendChild(btnWrap);
+
     grid.appendChild(card);
   }
 }
@@ -1124,6 +1188,7 @@ layerHeightEl.addEventListener('input', () => {
 
 resolutionEl.addEventListener('input', () => {
   resolutionVal.textContent = resolutionEl.value + 'px';
+  document.getElementById('res-warning').style.display = parseInt(resolutionEl.value) > 350 ? 'block' : 'none';
   updatePreview();
 });
 
@@ -1152,8 +1217,225 @@ bgThreshEl.addEventListener('input', () => {
 btnGenerate.addEventListener('click', generateSTLs);
 btnDownload.addEventListener('click', downloadZip);
 
+document.getElementById('btn-preview-3d').addEventListener('click', () => {
+  if (window.openLayerViewer) window.openLayerViewer(-1);
+});
+
+// Expose state/functions for the Three.js viewer module
+window._3dlm = {
+  get masks() { return masks; },
+  get imgW()  { return imgW; },
+  get imgH()  { return imgH; },
+  getNumLayers,
+  getPrintWidth,
+  getPrintHeight,
+  getLayerHeight,
+  getLayerColor,
+  buildTriangles,
+};
+
+// Enable the 3D preview buttons whenever a preview has been computed
+const _origRenderPreview = renderPreview;
+renderPreview = function() {
+  _origRenderPreview();
+  document.getElementById('btn-preview-3d').disabled = !masks.length;
+};
+
 // ─── INIT ────────────────────────────────────────────────────────────────────
 updateColorRows();
+</script>
+
+<!-- 3D VIEWER MODAL -->
+<div id="viewer-modal">
+  <div id="viewer-container">
+    <div id="viewer-toolbar">
+      <span id="viewer-title">3D Preview</span>
+      <div style="display:flex;gap:4px;align-items:center">
+        <button class="vbtn" id="vbtn-prev" title="Previous layer">‹ Prev</button>
+        <button class="vbtn vactive" id="vbtn-all" title="All layers stacked">All Layers</button>
+        <button class="vbtn" id="vbtn-next" title="Next layer">Next ›</button>
+      </div>
+      <div style="width:1px;height:20px;background:var(--border);margin:0 4px"></div>
+      <button class="vbtn" id="vbtn-reset" title="Reset camera">⌂ Reset</button>
+      <button class="vbtn" id="vbtn-close" style="margin-left:4px">✕ Close</button>
+    </div>
+    <canvas id="viewer-canvas" tabindex="0"></canvas>
+    <div id="viewer-layer-info"></div>
+    <div id="viewer-hint">Drag to rotate · Scroll to zoom · Right-drag / two-finger to pan · Esc to close</div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+let renderer = null, scene, camera, controls, animId = null;
+let currentLayer = -1; // -1 = all layers
+
+function init() {
+  const canvas = document.getElementById('viewer-canvas');
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x080a12);
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(48, 1, 0.001, 1e6);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const d1 = new THREE.DirectionalLight(0xffffff, 1.1); d1.position.set(1, 2, 1.5); scene.add(d1);
+  const d2 = new THREE.DirectionalLight(0x6688cc, 0.35); d2.position.set(-1, -1, -0.5); scene.add(d2);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.07;
+  controls.screenSpacePanning = true;
+}
+
+function resize() {
+  const c = document.getElementById('viewer-canvas');
+  if (!c || !renderer) return;
+  const w = c.clientWidth, h = c.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+function clearScene() {
+  const toRemove = [];
+  scene.traverse(o => { if (o.isMesh) toRemove.push(o); });
+  toRemove.forEach(m => { m.geometry.dispose(); m.material.dispose(); scene.remove(m); });
+}
+
+function fitCamera(meshes) {
+  const box = new THREE.Box3();
+  meshes.forEach(m => box.expandByObject(m));
+  const c = box.getCenter(new THREE.Vector3());
+  const s = box.getSize(new THREE.Vector3());
+  const d = Math.max(s.x, s.y, s.z) || 1;
+  camera.near = d * 0.001; camera.far = d * 50;
+  camera.updateProjectionMatrix();
+  camera.position.set(c.x + d * 0.8, c.y + d * 0.55, c.z + d * 1.3);
+  camera.lookAt(c);
+  controls.target.copy(c);
+  controls.update();
+}
+
+function makeLayerMesh(k, transparent) {
+  const app = window._3dlm;
+  const mask = app.masks[k];
+  if (!mask) return null;
+  const w = app.imgW, h = app.imgH;
+  const pw = app.getPrintWidth() / w, ph = app.getPrintHeight() / h;
+  const lh = app.getLayerHeight();
+  const z0 = k * lh;
+  const verts = app.buildTriangles(mask, w, h, pw, ph, z0, z0 + lh);
+  if (!verts || verts.length === 0) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshPhongMaterial({
+    color: new THREE.Color(app.getLayerColor(k)),
+    shininess: 55,
+    transparent: !!transparent,
+    opacity: transparent ? 0.88 : 1.0,
+    side: THREE.DoubleSide
+  });
+  return new THREE.Mesh(geo, mat);
+}
+
+function updateLayerInfo(indices) {
+  const app = window._3dlm;
+  const info = document.getElementById('viewer-layer-info');
+  info.innerHTML = '';
+  indices.forEach(k => {
+    const chip = document.createElement('div');
+    chip.className = 'layer-chip';
+    chip.innerHTML = `<div class="dot" style="background:${app.getLayerColor(k)}"></div>Layer ${k + 1}`;
+    info.appendChild(chip);
+  });
+}
+
+function showLayer(k) {
+  clearScene();
+  const mesh = makeLayerMesh(k, false);
+  if (mesh) { scene.add(mesh); fitCamera([mesh]); }
+  currentLayer = k;
+  const n = window._3dlm.getNumLayers();
+  document.getElementById('viewer-title').textContent = `Layer ${k + 1} of ${n}`;
+  document.getElementById('vbtn-all').classList.remove('vactive');
+  document.getElementById('vbtn-prev').disabled = k <= 0;
+  document.getElementById('vbtn-next').disabled = k >= n - 1;
+  updateLayerInfo([k]);
+}
+
+function showAll() {
+  clearScene();
+  const app = window._3dlm;
+  const n = app.getNumLayers();
+  const meshes = [];
+  for (let k = 0; k < n; k++) {
+    const m = makeLayerMesh(k, true);
+    if (m) { scene.add(m); meshes.push(m); }
+  }
+  if (meshes.length) fitCamera(meshes);
+  currentLayer = -1;
+  document.getElementById('viewer-title').textContent = 'All Layers Stacked';
+  document.getElementById('vbtn-all').classList.add('vactive');
+  document.getElementById('vbtn-prev').disabled = false;
+  document.getElementById('vbtn-next').disabled = false;
+  updateLayerInfo(Array.from({ length: n }, (_, i) => i));
+}
+
+function loop() {
+  animId = requestAnimationFrame(loop);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// Public API used by the non-module script
+window.openLayerViewer = function(k) {
+  const modal = document.getElementById('viewer-modal');
+  modal.style.display = 'flex';
+  if (!renderer) init();
+  setTimeout(() => {        // let the modal lay out so canvas has a size
+    resize();
+    if (k === -1) showAll(); else showLayer(k);
+    if (animId) cancelAnimationFrame(animId);
+    loop();
+  }, 30);
+};
+
+window.closeLayerViewer = function() {
+  document.getElementById('viewer-modal').style.display = 'none';
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+};
+
+document.getElementById('vbtn-close').addEventListener('click', window.closeLayerViewer);
+document.getElementById('vbtn-all').addEventListener('click', showAll);
+document.getElementById('vbtn-prev').addEventListener('click', () => {
+  const k = currentLayer === -1 ? 0 : Math.max(0, currentLayer - 1);
+  showLayer(k);
+});
+document.getElementById('vbtn-next').addEventListener('click', () => {
+  const n = window._3dlm.getNumLayers();
+  const k = currentLayer === -1 ? n - 1 : Math.min(n - 1, currentLayer + 1);
+  showLayer(k);
+});
+document.getElementById('vbtn-reset').addEventListener('click', () => {
+  if (currentLayer === -1) showAll(); else showLayer(currentLayer);
+});
+
+document.getElementById('viewer-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('viewer-modal')) window.closeLayerViewer();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('viewer-modal').style.display !== 'none') {
+    window.closeLayerViewer();
+  }
+});
+
+window.addEventListener('resize', resize);
 </script>
 </body>
 </html>
