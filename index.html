@@ -423,6 +423,45 @@
   .empty-state .icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.3; }
   .empty-state p { font-size: 0.9rem; }
 
+  /* SELECT */
+  select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 5px 8px;
+    font-size: 0.84rem;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+  select:focus { border-color: var(--accent); }
+
+  /* CHECKBOX TOGGLE */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    cursor: pointer;
+    font-size: 0.84rem;
+    color: var(--text);
+    user-select: none;
+  }
+  .toggle-row input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+  .bg-options {
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    margin-top: 4px;
+  }
+  .bg-options.visible { display: flex; }
+
   /* SCROLLBAR */
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -474,6 +513,31 @@
         <span class="control-label">Resolution</span>
         <input type="range" id="resolution" min="30" max="200" value="100" step="5">
         <span class="control-value" id="resolution-val">100px</span>
+      </div>
+      <div class="control-row">
+        <span class="control-label">Bright side</span>
+        <select id="layer-order" style="flex:1">
+          <option value="bright-top">Bright = top (light subjects)</option>
+          <option value="dark-top">Dark = top (dark subjects)</option>
+        </select>
+      </div>
+      <label class="toggle-row">
+        <input type="checkbox" id="bg-remove">
+        Remove background
+      </label>
+      <div class="bg-options" id="bg-options">
+        <div class="control-row" style="margin-bottom:0">
+          <span class="control-label">BG color</span>
+          <select id="bg-type" style="flex:1">
+            <option value="light">Light / white background</option>
+            <option value="dark">Dark / black background</option>
+          </select>
+        </div>
+        <div class="control-row" style="margin-bottom:0">
+          <span class="control-label">Threshold</span>
+          <input type="range" id="bg-threshold" min="0.02" max="0.6" step="0.01" value="0.15">
+          <span class="control-value" id="bg-threshold-val">15%</span>
+        </div>
       </div>
     </div>
 
@@ -571,6 +635,13 @@ function getLayerColor(k)  {
   const inp = document.getElementById('color-'+k);
   return inp ? inp.value : DEFAULT_COLORS[k % DEFAULT_COLORS.length];
 }
+function getInvertLayers() { return document.getElementById('layer-order').value === 'dark-top'; }
+function getBgRemove()     { return document.getElementById('bg-remove').checked; }
+function getBgIsLight()    { return document.getElementById('bg-type').value === 'light'; }
+function getBgThreshold()  { return parseFloat(document.getElementById('bg-threshold').value); }
+function getLayerParams()  {
+  return [getNumLayers(), getInvertLayers(), getBgRemove(), getBgIsLight(), getBgThreshold()];
+}
 
 function hexToRgb(hex) {
   const r = parseInt(hex.slice(1,3),16);
@@ -643,14 +714,32 @@ function computeGray(imageDataResult) {
   return gray;
 }
 
-function computeLayers(gray, numLayers) {
+function computeLayers(gray, numLayers, invertLayers, bgRemove, bgIsLight, bgThreshold) {
   const n = gray.length;
   const result = [];
+
+  // Build foreground mask — pixels that should be printed at all
+  const fg = new Uint8Array(n).fill(1);
+  if (bgRemove) {
+    for (let i = 0; i < n; i++) {
+      // bgIsLight: skip pixels that are too bright (white/light background)
+      // !bgIsLight: skip pixels that are too dark (black/dark background)
+      fg[i] = bgIsLight ? (gray[i] < 1 - bgThreshold ? 1 : 0)
+                        : (gray[i] > bgThreshold      ? 1 : 0);
+    }
+  }
+
+  // Cumulative layers: layer k covers pixels whose brightness passes its threshold
+  // invertLayers = true  → dark pixels are tall (threshold from top: dark = more layers)
+  // invertLayers = false → bright pixels are tall (default)
   for (let k = 0; k < numLayers; k++) {
-    const threshold = k / numLayers;
     const mask = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
-      mask[i] = gray[i] >= threshold ? 1 : 0;
+      if (!fg[i]) continue;
+      const active = invertLayers
+        ? gray[i] <= (1 - k / numLayers)   // dark pixels included in more layers
+        : gray[i] >= k / numLayers;         // bright pixels included in more layers
+      mask[i] = active ? 1 : 0;
     }
     result.push(mask);
   }
@@ -796,8 +885,8 @@ function updatePreview() {
   imgW = imgDataResult.width;
   imgH = imgDataResult.height;
   grayData = computeGray(imgDataResult);
-  const n = getNumLayers();
-  masks = computeLayers(grayData, n);
+  const [n, inv, bgR, bgL, bgT] = getLayerParams();
+  masks = computeLayers(grayData, n, inv, bgR, bgL, bgT);
   renderPreview();
 }
 
@@ -921,7 +1010,8 @@ async function generateSTLs() {
   imgW = imgDataResult.width;
   imgH = imgDataResult.height;
   grayData = computeGray(imgDataResult);
-  masks = computeLayers(grayData, n);
+  const [, inv, bgR, bgL, bgT] = getLayerParams();
+  masks = computeLayers(grayData, n, inv, bgR, bgL, bgT);
 
   const pixW = pW / imgW;
   const pixH = pH / imgH;
@@ -1039,6 +1129,24 @@ resolutionEl.addEventListener('input', () => {
 
 printWidthEl.addEventListener('change', () => updatePreview());
 printHeightEl.addEventListener('change', () => updatePreview());
+
+document.getElementById('layer-order').addEventListener('change', () => updatePreview());
+
+const bgRemoveEl   = document.getElementById('bg-remove');
+const bgOptionsEl  = document.getElementById('bg-options');
+const bgTypeEl     = document.getElementById('bg-type');
+const bgThreshEl   = document.getElementById('bg-threshold');
+const bgThreshVal  = document.getElementById('bg-threshold-val');
+
+bgRemoveEl.addEventListener('change', () => {
+  bgOptionsEl.classList.toggle('visible', bgRemoveEl.checked);
+  updatePreview();
+});
+bgTypeEl.addEventListener('change', () => updatePreview());
+bgThreshEl.addEventListener('input', () => {
+  bgThreshVal.textContent = Math.round(parseFloat(bgThreshEl.value) * 100) + '%';
+  updatePreview();
+});
 
 // Buttons
 btnGenerate.addEventListener('click', generateSTLs);
